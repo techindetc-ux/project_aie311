@@ -12,6 +12,22 @@ const port = process.env.PORT || 5000;
 app.use(cors({ origin: process.env.FRONTEND_URL || '*' }));
 app.use(express.json());
 
+const fallbackChatHistory = new Map();
+
+const fallbackPortfolio = {
+  group: {
+    id: 1,
+    group_name: 'MANIFESTx',
+    concept: 'ร่วมสร้างสรรค์เทคโนโลยีและพัฒนาผลงานดิจิทัลด้วยความคิดสร้างสรรค์และการทำงานเป็นทีม',
+    highlights: 'กลุ่มผู้พัฒนาเว็บแอปพลิเคชันที่ผสานการออกแบบส่วนติดต่อผู้ใช้ ฐานข้อมูล และปัญญาประดิษฐ์',
+  },
+  members: [
+    { name: 'เตชิน เดชจิตร', role: 'Frontend & UI/UX', skills: ['React', 'JavaScript', 'CSS3', 'Figma'], projects: [{ name: 'MANIFEST CHAT AI - Frontend', detail: 'ออกแบบและพัฒนาหน้าเว็บ Portfolio และหน้าแชตโต้ตอบกับ AI' }] },
+    { name: 'จารุยา จรุงพร', role: 'Backend & Database', skills: ['Node.js', 'Express', 'PostgreSQL', 'REST API'], projects: [{ name: 'MANIFEST CHAT AI - Backend & DB', detail: 'ออกแบบฐานข้อมูล PostgreSQL และพัฒนา REST API รับ-ส่งข้อมูล' }] },
+    { name: 'เพ็ญพิศุทธิ์ วชิระอารีรัตน์', role: 'AI Integration', skills: ['Gemini API', 'Prompt Engineering', 'GitHub Actions', 'CI/CD'], projects: [{ name: 'MANIFEST CHAT AI - AI & CI/CD', detail: 'เชื่อมต่อระบบ AI พร้อม Context ข้อมูลกลุ่ม และวางระบบ Build/Deploy อัตโนมัติ' }] },
+  ],
+};
+
 // 1. ตั้งค่าการเชื่อมต่อ PostgreSQL
 const { Pool } = pg;
 const pool = new Pool({
@@ -26,8 +42,9 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 // 3. สร้างตารางและอัปเดตข้อมูล Portfolio ลง PostgreSQL อัตโนมัติ
 async function initDatabase() {
-  const client = await pool.connect();
+  let client;
   try {
+    client = await pool.connect();
     // ตารางเก็บประวัติการสนทนา
     await client.query(`
       CREATE TABLE IF NOT EXISTS chat_messages (
@@ -143,7 +160,7 @@ async function initDatabase() {
   } catch (err) {
     console.error('❌ Database error:', err);
   } finally {
-    client.release();
+    if (client) client.release();
   }
 }
 
@@ -162,7 +179,25 @@ app.get('/api/portfolio', async (req, res) => {
       members: membersRes.rows || [],
     });
   } catch (error) {
-    res.status(500).json({ error: 'ไม่สามารถดึงข้อมูล Portfolio ได้' });
+    res.json({
+      group: {
+        id: 1,
+        group_name: 'MANIFEST',
+        concept: 'ร่วมสร้างสรรค์เทคโนโลยีและพัฒนาผลงานดิจิทัลด้วยความคิดสร้างสรรค์และการทำงานเป็นทีม',
+        highlights: 'กลุ่มผู้พัฒนาเว็บแอปพลิเคชันที่ผสานการออกแบบส่วนติดต่อผู้ใช้ ฐานข้อมูล และปัญญาประดิษฐ์',
+        group_projects: [{
+          title: 'MANIFEST CHAT AI',
+          description: 'เว็บแอปพลิเคชันแสดงผลงานของกลุ่ม MANIFEST พร้อมผู้ช่วย AI ที่ตอบคำถามเกี่ยวกับสมาชิกและผลงาน',
+          tech: ['React', 'Express', 'PostgreSQL', 'Gemini AI'],
+        }],
+        contact: { email: 'teamsmanifest@gmail.com', github: 'https://github.com/techindetc-ux/project_aie312' },
+      },
+      members: [
+        { name: 'เตชิน เดชจิตร', role: 'Frontend & UI/UX', skills: ['React', 'JavaScript', 'CSS3', 'Figma'], projects: [{ name: 'MANIFEST CHAT AI - Frontend', detail: 'ออกแบบและพัฒนาหน้าเว็บ Portfolio และหน้าแชตโต้ตอบกับ AI' }] },
+        { name: 'จารุยา จรุงพร', role: 'Backend & Database', skills: ['Node.js', 'Express', 'PostgreSQL', 'REST API'], projects: [{ name: 'MANIFEST CHAT AI - Backend & DB', detail: 'ออกแบบฐานข้อมูล PostgreSQL และพัฒนา REST API รับ-ส่งข้อมูล' }] },
+        { name: 'เพ็ญพิศุทธิ์ วชิระอารีรัตน์', role: 'AI Integration', skills: ['Gemini API', 'Prompt Engineering', 'GitHub Actions', 'CI/CD'], projects: [{ name: 'MANIFEST CHAT AI - AI & CI/CD', detail: 'เชื่อมต่อระบบ AI พร้อม Context ข้อมูลกลุ่ม และวางระบบ Build/Deploy อัตโนมัติ' }] },
+      ],
+    });
   }
 });
 
@@ -186,7 +221,11 @@ app.get('/api/chat', async (req, res) => {
     );
     res.json(result.rows);
   } catch (error) {
-    res.status(500).json({ error: 'ไม่สามารถดึงประวัติแชตได้' });
+    res.json((fallbackChatHistory.get(sessionId) || []).map((item, index) => ({
+      id: index + 1,
+      role: item.role,
+      content: item.content,
+    })));
   }
 });
 
@@ -198,10 +237,11 @@ app.delete('/api/chat', async (req, res) => {
 
   try {
     await pool.query('DELETE FROM chat_messages WHERE session_id = $1', [sessionId]);
-    res.json({ message: 'ล้างประวัติสนทนาเรียบร้อย' });
   } catch (error) {
-    res.status(500).json({ error: 'ไม่สามารถล้างประวัติแชตได้' });
+    // Continue with in-memory history when PostgreSQL is unavailable.
   }
+  fallbackChatHistory.delete(sessionId);
+  res.json({ message: 'ล้างประวัติสนทนาเรียบร้อย' });
 });
 
 app.post('/api/chat', async (req, res) => {
@@ -215,14 +255,20 @@ app.post('/api/chat', async (req, res) => {
   }
 
   try {
-    await pool.query('INSERT INTO chat_messages (session_id, role, content) VALUES ($1, $2, $3)', [
-      sessionId,
-      'user',
-      message.trim(),
-    ]);
+    await pool.query(
+      'INSERT INTO chat_messages (session_id, role, content) VALUES ($1, $2, $3)',
+      [sessionId, 'user', message.trim()]
+    ).catch(() => {});
 
-    const groupRes = await pool.query('SELECT * FROM portfolio_group WHERE id = 1');
-    const membersRes = await pool.query('SELECT * FROM portfolio_members ORDER BY id ASC');
+    let groupRes;
+    let membersRes;
+    try {
+      groupRes = await pool.query('SELECT * FROM portfolio_group WHERE id = 1');
+      membersRes = await pool.query('SELECT * FROM portfolio_members ORDER BY id ASC');
+    } catch (error) {
+      groupRes = { rows: [fallbackPortfolio.group] };
+      membersRes = { rows: fallbackPortfolio.members };
+    }
     const portfolioContext = JSON.stringify({
       group: groupRes.rows[0],
       members: membersRes.rows,
@@ -238,14 +284,23 @@ app.post('/api/chat', async (req, res) => {
 ${portfolioContext}
 `;
 
-    const historyRes = await pool.query(
-      'SELECT role, content FROM chat_messages WHERE session_id = $1 ORDER BY id DESC LIMIT 6',
-      [sessionId]
-    );
-    const recentHistory = historyRes.rows
-      .reverse()
-      .map((r) => `${r.role === 'user' ? 'ผู้ใช้' : 'AI'}: ${r.content}`)
-      .join('\n');
+    let recentHistory;
+    try {
+      const historyRes = await pool.query(
+        'SELECT role, content FROM chat_messages WHERE session_id = $1 ORDER BY id DESC LIMIT 6',
+        [sessionId]
+      );
+      recentHistory = historyRes.rows
+        .reverse()
+        .map((r) => `${r.role === 'user' ? 'ผู้ใช้' : 'AI'}: ${r.content}`)
+        .join('\n');
+    } catch (error) {
+      const memoryHistory = fallbackChatHistory.get(sessionId) || [];
+      recentHistory = memoryHistory
+        .slice(-6)
+        .map((r) => `${r.role === 'user' ? 'ผู้ใช้' : 'AI'}: ${r.content}`)
+        .join('\n');
+    }
 
     const response = await ai.models.generateContent({
       model: 'gemini-3.5-flash-lite',
@@ -271,8 +326,10 @@ ${portfolioContext}
   }
 });
 
-initDatabase().then(() => {
-  app.listen(port, () => {
-    console.log(`🚀 Backend โปรเจกต์ MANIFEST CHAT AI พร้อมใช้งานที่ http://localhost:${port}`);
-  });
+app.listen(port, () => {
+  console.log(`🚀 Backend โปรเจกต์ MANIFEST CHAT AI พร้อมใช้งานที่ http://localhost:${port}`);
+});
+
+initDatabase().catch((error) => {
+  console.error('❌ ไม่สามารถเริ่มฐานข้อมูลได้:', error.code || error.message);
 });
